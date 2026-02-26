@@ -1,0 +1,187 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class VIBHO(nn.Module):
+    def __init__(self, input_size=288*320, z_dim=1):
+        super(VIBHO, self).__init__()
+
+        self.fc_mu     = nn.Linear(input_size, z_dim)
+        self.fc_logvar = nn.Linear(input_size, z_dim)
+        self.fc_out    = nn.Linear(z_dim, 1)
+    
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+    
+    def forward(self, x):
+        B = x.size(0)
+        x = x.view(B, -1)     
+        mu = self.fc_mu(x)         
+        logvar = self.fc_logvar(x)     
+        
+        z = self.reparameterize(mu, logvar)  
+        t = self.fc_out(z)             
+        
+        return t, mu, logvar
+    
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, ker, pad):
+        super(ConvBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=ker, padding=pad),
+            nn.InstanceNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=ker, padding=pad),
+            nn.InstanceNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.AvgPool2d(kernel_size=2, stride=2)
+        )
+    def forward(self, x):
+        return self.block(x)
+
+        
+class VIBCNN(nn.Module):
+    def __init__(self, depth, num_classes, ker=3, pad=1, mode='train', z_dim=32):
+        super(VIBCNN, self).__init__()
+        self.mode = mode
+        depth = depth - 1
+        self.ker = ker
+        self.pad = pad
+
+        # encoder channel sizes
+        channels = [16, 24, 32, 48, 64, 96]
+        self.conv_layers = nn.ModuleList()
+        for i in range(depth):
+            self.conv_layers.append(ConvBlock(channels[i], channels[i+1],
+                                             ker=self.ker, pad=self.pad))
+
+        # compute flattened feature size after conv + pooling
+        if depth == 0:
+            classifier_input_dim = 288 * 320
+        else:
+            h = 288 // (2 ** depth)
+            w = 320 // (2 ** depth)
+            classifier_input_dim = h * w * channels[depth]
+
+        # initial conv
+        self.inc = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+
+        # VIB bottleneck
+        self.mu     = nn.Linear(classifier_input_dim, z_dim)
+        self.logvar = nn.Linear(classifier_input_dim, z_dim)
+
+        # classifier on z
+        self.classifier = nn.Linear(z_dim, num_classes)
+        # self.classifier = nn.Sequential(
+        #     nn.Linear(z_dim, 64),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(64, 32),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(32, num_classes),
+        # )
+
+        # decoder...
+        self.decoder_input = nn.Linear(z_dim+num_classes, classifier_input_dim)
+        channels_rev = channels[: depth+1][::-1]
+        self.decoder_layers = nn.ModuleList()
+        for i in range(depth):
+            in_ch  = channels_rev[i]
+            out_ch = channels_rev[i+1]
+            self.decoder_layers.append(nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='nearest'),
+                nn.Conv2d(in_ch, out_ch, kernel_size=self.ker, padding=self.pad),
+                nn.InstanceNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(out_ch, out_ch, kernel_size=self.ker, padding=self.pad),
+                nn.InstanceNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+            ))
+        self.decoder_output = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
+        # self.apply(self._init_weights)
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x, label=None, mode='train'):
+        # encode
+        self.mode = mode
+        x_enc = self.inc(x)
+        for layer in self.conv_layers:
+            x_enc = layer(x_enc)
+
+        # remember shape for decoder
+        batch_size, C, H, W = x_enc.shape
+        flat = x_enc.view(batch_size, -1)
+
+        # bottleneck
+        mu     = self.mu(flat)
+        logvar = self.logvar(flat)
+        if mode == 'train':
+            z = self.reparameterize(mu, logvar)
+        else:
+            z = mu  # use mean at inference
+
+        # classification head
+        t = self.classifier(z)
+
+        # decode / reconstruct
+        if mode == 'train':
+            # print(f"z: {z}")
+            # print(f"label: {label}")
+            d_in = torch.cat((z, label), dim=1)  # concatenate z and t
+            recon = self.decoder_input(d_in)
+        else:
+            d_in = torch.cat((z, t), dim=1)  # concatenate z and t
+            recon = self.decoder_input(d_in)
+        recon = recon.view(batch_size, C, H, W)
+        for layer in self.decoder_layers:
+            recon = layer(recon)
+        recon = self.decoder_output(recon)
+
+        return t, mu, logvar, recon
+
+if __name__ == '__main__':
+    a = torch.randn(1, 1, 288, 320)
+    b = torch.randn(1, 1)
+    # model = UNet_Tiny_woc(1, 1)
+    # parameters
+    # print(sum(p.numel() for p in model.parameters()))
+    # print(model(a).shape)
+
+    # model = UNet_Small(1, 1)
+    # print(sum(p.numel() for p in model.parameters()))
+    # print(model(a).shape)
+
+    # model = UNet_Tiny(1, 1)
+    # print(sum(p.numel() for p in model.parameters()))
+    # print(model(a).shape)
+
+    # model = ResNetX(5)
+    # print(sum(p.numel() for p in model.parameters()))
+    # print(model(a).shape)
+
+    # model = MIEstimator(depth=3, input_size=1)
+    # print(sum(p.numel() for p in model.parameters()))
+    # print(model(a, b).shape)
+
+    # RDN model
+    # model = RDN(scale_factor=1, num_channels=1, num_features=64, growth_rate=64, num_blocks=6, num_layers=8)
+    # print(sum(p.numel() for p in model.parameters()))
+
+    # model = BinaryClassifier(depth=5, num_classes=2)
+    # print(sum(p.numel() for p in model.parameters()))
+
+    model = VIBCNN(depth=5, num_classes=2)
+    print(sum(p.numel() for p in model.parameters()))
+    # print(model(a).shape)
+
+    t, mu, logvar, x = model(a, torch.zeros(1, 2), mode='train')
+    print(t.shape, mu.shape, logvar.shape, x.shape)
+    
