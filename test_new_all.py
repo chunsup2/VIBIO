@@ -34,7 +34,7 @@ def get_args():
     parser.add_argument('--num_workers', type=int, default=8)
 
     # Data Params
-    parser.add_argument('--data', type=str, default='sks_3_0.04_15_c2_num_signals')
+    parser.add_argument('--data', type=str, default='ske_3.0_0.05_0.35')
     parser.add_argument('--test_image_path', type=str, default=None)
 
     # Checkpoint Directory (Target Folder)
@@ -157,15 +157,25 @@ def evaluate_single_model(model, loader, device, params, args, model_name):
     cls_type = params['cls_type']
     train_type = params['train_type']
 
-    with torch.no_grad():
-        for image, measure, label in tqdm(loader, desc=f"Testing {model_name}", leave=False):
-            image, measure, label = image.to(device), measure.to(device), label.to(device)
-            label = label.long()
+    total_loss = 0.0
+    num_batches = 0
+    ce_criterion = nn.CrossEntropyLoss().to(device)
+    bce_criterion = nn.BCELoss().to(device)
 
-            if train_type == 'measure':
-                feats = measure
-            else:
-                feats = image
+    with torch.no_grad():
+        # for image, measure, label in tqdm(loader, desc=f"Testing {model_name}", leave=False):
+        #     image, measure, label = image.to(device), measure.to(device), label.to(device)
+        #     label = label.long()
+
+            # if train_type == 'measure':
+            #     feats = measure
+            # else:
+            #     feats = image
+        for i, data in enumerate(tqdm(loader)):
+            feats = data[0].to('cuda')
+            feats = feats.unsqueeze(1)
+
+            label = torch.tensor([int(lbl) for lbl in data[1]]).to('cuda')
 
             # Inference Logic
             if cls_type in ['CNN', 'ResNet']:
@@ -173,12 +183,14 @@ def evaluate_single_model(model, loader, device, params, args, model_name):
                 probs = F.softmax(output, dim=1)
                 pos_probs = probs[:, 1]
                 preds = torch.argmax(probs, dim=1)
+                loss = ce_criterion(output, label)
 
             elif cls_type == 'VIBCNN':
                 t, mu, logvar, recon = model(feats, mode='test')
                 probs = F.softmax(t, dim=1)
                 pos_probs = probs[:, 1]
                 preds = torch.argmax(probs, dim=1)
+                loss = ce_criterion(t, label)
 
             elif cls_type in ['HO', 'VIBHO']:
                 if cls_type == 'VIBHO':
@@ -189,6 +201,8 @@ def evaluate_single_model(model, loader, device, params, args, model_name):
                 output = output.squeeze()
                 pos_probs = output
                 preds = (output > 0.5).long()
+                # Assuming HO outputs probabilities between 0 and 1
+                loss = bce_criterion(output, label.float())
 
             else:
                 # Default generic handle
@@ -196,10 +210,18 @@ def evaluate_single_model(model, loader, device, params, args, model_name):
                 probs = F.softmax(output, dim=1)
                 pos_probs = probs[:, 1]
                 preds = torch.argmax(probs, dim=1)
+                loss = ce_criterion(output, label)
+
+            # Accumulate Loss
+            total_loss += loss.item()
+            num_batches += 1
 
             all_labels.extend(label.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_probs.extend(pos_probs.cpu().numpy())
+
+    # Calculate Average Test Loss
+    avg_test_loss = total_loss / num_batches if num_batches > 0 else float('nan')
 
     # Metrics
     y_true = np.array(all_labels)
@@ -223,6 +245,7 @@ def evaluate_single_model(model, loader, device, params, args, model_name):
 
     return {
         'Filename': model_name,
+        'Test_Loss': avg_test_loss,
         'Accuracy': acc,
         'AUC_Mean': auc_mean,
         'AUC_Std': auc_std,
@@ -235,7 +258,8 @@ def main(args):
 
     # 1. Setup Data Paths
     if args.test_image_path is None:
-        args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/{args.data}/val/data.h5'
+        # args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/{args.data}/val/data.h5'
+        args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/test/{args.data}/dataset-{{000000..000004}}.tar'
 
     print(f"Data Source: {args.test_image_path}")
     print(f"Checkpoint Dir: {args.ckpt_dir}")
@@ -243,8 +267,19 @@ def main(args):
     # 2. Load Dataset ONCE
     # We load data once and reuse it for all models to save IO time
     print("Loading Test Dataset...")
-    test_dataset = MRIDataset1(args.test_image_path, proportion=1.0)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=args.num_workers)
+    # test_dataset = MRIDataset1(args.test_image_path, proportion=1.0)
+    # test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=args.num_workers)
+    import webdataset as wds
+
+    test_dataset = (
+        wds.WebDataset(args.test_image_path, shardshuffle=False)
+        .decode("torch")
+        .to_tuple("npy", "cls")  # Extract the "jpg" and "cls" keys we defined during writing
+        .batched(100)  # Batch them together (e.g., batch size 64)
+        .with_length(100)
+    )
+
+    test_dataloader = DataLoader(test_dataset, num_workers=1, batch_size=None)
 
     # 3. Find all .pth files
     if not os.path.isdir(args.ckpt_dir):
@@ -289,10 +324,10 @@ def main(args):
             model.load_state_dict(state_dict)
 
             # Run Test
-            res = evaluate_single_model(model, test_loader, device, params, args, f_name)
+            res = evaluate_single_model(model, test_dataloader, device, params, args, f_name)
             results_list.append(res)
 
-            print(f"   -> Acc: {res['Accuracy']:.4f} | AUC: {res['AUC_Mean']:.4f} | AUC_std: {res['AUC_Std']:.4f}")
+            print(f"   -> Loss: {res['Test_Loss']:.4f} | Acc: {res['Accuracy']:.4f} | AUC: {res['AUC_Mean']:.4f} | AUC_std: {res['AUC_Std']:.4f}")
 
         except Exception as e:
             print(f"   -> Failed to process {f_name}. Error: {e}")
@@ -314,7 +349,7 @@ def main(args):
         print("\n" + "=" * 50)
         print(f"Processing Complete. Summary saved to:\n{save_path}")
         print("=" * 50)
-        print(df[['Filename', 'Accuracy', 'AUC_Mean', 'AUC_Std', 'z_dim']].head().to_string())
+        print(df[['Filename', 'Test_Loss', 'Accuracy', 'AUC_Mean', 'AUC_Std', 'z_dim']].head().to_string())
 
 
 if __name__ == '__main__':

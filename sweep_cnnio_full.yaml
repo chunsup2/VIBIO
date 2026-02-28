@@ -1,4 +1,5 @@
-project: CNNIO-SKS-MRI-FULL
+
+project: CNNIO-SKE-MRI-DEPTH
 entity: cspark5484
 program: train_cls_new.py  # REPLACE with your actual python file name
 method: grid                  # Use 'grid' for all combinations, or 'bayes' for optimization
@@ -14,26 +15,28 @@ parameters:
   #   max: 0.0001
   #   distribution: log_uniform_values
   lr:
-    values: [0.0001, 0.005, 0.001]
-  kl:
-    value: 1e-5
+    value: 0.005
   # --- Base Parameters (Fixed for every run) ---
-  z_dim:
-    value: 256
   cls_type:
     value: "CNN"
-  proporation:
-    value: 1.0
+  n_data:
+    value: 100.0
   data:
     value: "ske_3.0_0.05_35.0"
+  sigma:
+    value: 3.0
+  amplitude:
+    value: 0.05
+  noise_level:
+    value: 35.0
   train_type:                     # Maps to your 'image="measure"' requirement
     value: "measure"
   depth:
-    value: 2
+    value: 1
   epochs:
     value: 10000
   patience:
-    value: 33
+    value: 15
   num_workers:
     value: 4
   use_ram:
@@ -45,5 +48,5 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - "7"
+  - "3"
   - ${args}

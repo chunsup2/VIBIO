@@ -1,9 +1,6 @@
 import os
 os.environ["WANDB__SERVICE_WAIT"] = "120"
 
-import warnings
-warnings.filterwarnings("ignore")
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -24,7 +21,6 @@ import numpy as np
 import argparse
 import wandb
 import h5py
-import webdataset as wds
 from wandb import Image
 
 from utils import load_model, normal_IO_train_torch, normal_IO_test_torch, normal_IO_train_torch1, \
@@ -82,10 +78,7 @@ def apply_kspace_noise(imgs, mask, noise_level):
     noise = torch.complex(noise_real, noise_imag)
 
     # Add noise and apply mask
-    if mask is not None:
-        kspace_noisy = (kspace + noise) * mask
-    else:
-        kspace_noisy = (kspace + noise)
+    kspace_noisy = (kspace + noise)
 
     # Perform batched 2D Inverse FFT
     img_recon = torch.fft.ifft2(kspace_noisy)
@@ -131,54 +124,62 @@ def train(args):
     # criterion = nn.MSELoss().to(device)
     cls_criterion = nn.CrossEntropyLoss().to(device)  # CrossEntropyLoss expects integer labels
 
-    total_images = int(args.n_data * 1000)
+    if args.use_ram:
+        if args.train_type == 'measure':
+            train_dataset = MRIDataset2_2(args.train_image_path, args.proporation)
+            val_dataset = MRIDataset2_2(args.val_image_path, proportion=1.0)
+        else:
+            train_dataset = MRIDataset2(args.train_image_path, args.proporation)
+            val_dataset = MRIDataset2(args.val_image_path, proportion=1.0)
 
-    if args.n_data < 10:
-        n_shuffle = total_images
     else:
-        n_shuffle = 10000
+        if args.train_type == 'measure':
+            # train_dataset = MRIDataset1_2(args.train_image_path, args.proporation)
+            # val_dataset = MRIDataset1_2(args.val_image_path, proportion=1.0)
+            train_dataset = MRIDataset3_2(args.train_image_path, args.proporation)
+            val_dataset = MRIDataset3_2(args.val_image_path, proportion=0.5)
+        else:
+            train_dataset = MRIDataset1(args.train_image_path, args.proporation)
+            val_dataset = MRIDataset1(args.val_image_path, proportion=1.0)
 
+    if args.use_ram:
+        with h5py.File(args.train_image_path, "r") as f:
+            all_labels_train = f['label'][:train_dataset.selected_length]
+    else:
+        mapped_data = np.load(os.path.join(args.train_image_path, 'label.npy'))
+        all_labels_train = mapped_data[:train_dataset.selected_length]
 
-    train_dataset = (
-        wds.WebDataset(args.train_image_path, shardshuffle=True)
-        .slice(total_images)
-        .shuffle(n_shuffle, initial=10000)  # Shuffle the shards and maintain a local buffer of 10000 samples
-        .decode("torch")
-        .to_tuple("npy")  # Extract the "jpg" and "cls" keys we defined during writing
-        .batched(args.batch_size)  # Batch them together (e.g., batch size 64)
-        .with_length(int(total_images / 256))  # 672
+    train_class_counts = np.bincount(all_labels_train)
+    train_weights = 1. / train_class_counts
+    train_samples_weights = torch.from_numpy(train_weights[all_labels_train])
+    train_sampler = WeightedRandomSampler(train_samples_weights, len(train_samples_weights))
+
+    # training check
+    # train_dataset = Subset(train_dataset, range(1000))
+    # val_dataset = Subset(val_dataset, range(1000))
+
+    train_dataloader = DataLoader(
+        train_dataset,  # Your dataset
+        batch_size=args.batch_size,  # Batch size (samples per batch)
+        shuffle=False,  # Whether to shuffle data
+        drop_last=True,  # Drop incomplete batches
+        num_workers=args.num_workers,  # Number of CPU processes for data reading
+        # pin_memory=True,  # Accelerate CPU->GPU copy
+        # persistent_workers=True,  # Workers do not restart repeatedly
+        # prefetch_factor=4,  # How many batches to prefetch
+        sampler=train_sampler
     )
 
-    val_dataset = (
-        wds.WebDataset(args.val_image_path, shardshuffle=False)
-        .decode("torch")
-        .to_tuple("npy", "cls")  # Extract the "jpg" and "cls" keys we defined during writing
-        .batched(200)  # Batch them together (e.g., batch size 64)
-        .with_length(50)
+    val_dataloader = DataLoader(
+        val_dataset,  # Your dataset
+        batch_size=args.batch_size,  # Batch size (samples per batch)
+        shuffle=False,  # Whether to shuffle data
+        drop_last=True,  # Drop incomplete batches
+        num_workers=args.num_workers,  # Number of CPU processes for data reading
+        # pin_memory=True,  # Accelerate CPU->GPU copy
+        # persistent_workers=True,  # Workers do not restart repeatedly
+        # prefetch_factor=4  # How many batches to prefetch
     )
-
-    if args.signal_location == 'SKE':
-        x0, y0 = 170, 220
-    else: # 'SKS'
-        # To do
-        x0, y0 = 170, 220
-
-    H, W = 260, 311
-    target_size = 272, 320
-
-    X, Y = torch.meshgrid(
-        torch.arange(H, device='cuda'),
-        torch.arange(W, device='cuda'),
-        indexing='ij'
-    )
-    distance_sq = (X - x0) ** 2 + (Y - y0) ** 2
-    within_3sigma = distance_sq <= (3 * args.sigma) ** 2
-
-    signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
-    signal[within_3sigma] = args.amplitude * torch.exp(-0.5 * distance_sq[within_3sigma] / (args.sigma ** 2))
-
-    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None)
-    val_dataloader = DataLoader(val_dataset, num_workers=1, batch_size=None)
 
 
     ## --- Training State Variables ---
@@ -207,38 +208,34 @@ def train(args):
         # K_ema = np.zeros((args.z_dim, args.z_dim))
 
         for i, data in enumerate(tqdm(train_dataloader)):
-            images = data[0].to('cuda')
+            # global_step += 1
 
-            B, H, W = images.shape
-            half_B = B // 2
+            # image, measure, task_label = image.to(device), measure.to(device), task_label.to(device)
 
-            # ---------------------------------------------------------
-            # STEP A: Create and Add Signal to the FIRST HALF
-            # (Do this before padding so your y0, x0 coordinates stay accurate to the anatomy!)
-            # ---------------------------------------------------------
+            if args.train_type == 'measure':
+                measure = data[0].to(device)
+                task_label = data[1].to(device)
+                feats = measure
+            elif args.train_type == 'cls':
+                image = data[0].to(device)
+                # measure = data[1].to(device)
+                task_label = data[2].to(device)
+                feats = image
+            else:
+                raise ValueError(f"Unknown train_type {args.train_type}")
 
-            # Inject the localized signal into the first half of the batch
-            images[:half_B] = images[:half_B] + signal
+            # Remove one-hot encoding; ensure task_label is LongTensor
+            task_label = task_label.long()
 
-            target_H, target_W = target_size
-            pad_h = target_H - H
-            pad_w = target_W - W
+            # loss = None
+            # kl_loss = 0.0
+            # cls_loss = 0.0
 
-            pad_tuple = (
-                max(0, pad_w // 2),
-                max(0, pad_w - pad_w // 2),
-                max(0, pad_h // 2),
-                max(0, pad_h - pad_h // 2)
-            )
-            # The empty padded areas are currently 0.0
-            images = F.pad(images, pad_tuple, mode="constant", value=0.0)
-            images = images.unsqueeze(1)
-
-            # print(images.shape)
-            feats = apply_kspace_noise(images, None, args.noise_level)
-
-            task_label = torch.zeros(B, dtype=torch.long, device='cuda')
-            task_label[:half_B] = 1
+            # loss = torch.tensor(0.0).to(device)
+            # kl_loss = torch.tensor(0.0).to(device)
+            # cls_loss = torch.tensor(0.0).to(device)
+            # ho_loss = torch.tensor(0.0).to(device)
+            # recon_loss = torch.tensor(0.0).to(device)
 
             if args.cls_type in ['CNN', 'ResNet']:
                 cls = cls_model(feats)
@@ -312,10 +309,22 @@ def train(args):
 
         with torch.no_grad():
             for i, data in enumerate(tqdm(val_dataloader)):
-                feats = data[0].to('cuda')
-                feats = feats.unsqueeze(1)
+                # image, measure, task_label = image.to(device), measure.to(device), task_label.to(device)
+                # measure, task_label = measure.to(device), task_label.to(device)
 
-                task_label = torch.tensor([int(lbl) for lbl in data[1]]).to('cuda')
+                if args.train_type == 'measure':
+                    measure = data[0].to(device)
+                    task_label = data[1].to(device)
+                    feats = measure
+                elif args.train_type == 'cls':
+                    image = data[0].to(device)
+                    # measure = data[1].to(device)
+                    task_label = data[2].to(device)
+                    feats = image
+                else:
+                    raise ValueError(f"Unknown train_type {args.train_type}")
+
+                task_label = task_label.long()
 
                 if args.cls_type in ['CNN', 'ResNet']:
                     cls = cls_model(feats)
@@ -350,6 +359,25 @@ def train(args):
                 # total += task_label.size(0)
                 # correct += (predicted == task_label).sum().item()
 
+                # if args.cls_type == 'HO' or args.cls_type == 'VIBHO':
+                #     test_stat = cls.squeeze()
+                #     predicted = (test_stat > 0.5).to(torch.int64)  # Using to(torch.int64) instead of long()
+                #     predicted_labels.extend(predicted.detach().cpu().numpy())
+                #     predicted_probs.extend(test_stat.detach().cpu().numpy())
+
+                # if i == 0:
+                #     image_ = image[0].squeeze(0).detach().cpu().numpy()
+                #     measure_ = measure[0].squeeze(0).detach().cpu().numpy()
+                #     wandb.log({
+                #         # "Test Loss": loss.item(),
+                #         "Images": [wandb.Image(image_, caption="Object"),
+                #                    wandb.Image(measure_, caption="Measurement")]
+                #     })
+                #     if args.train_type == 'recon':
+                #         recon_ = recon[0].squeeze(0).detach().cpu().numpy()
+                #         wandb.log({
+                #             "Images": [wandb.Image(recon_, caption="Reconstruction")]
+                #         })
 
         # Calculate the accuracy
         # if args.cls_type == 'CNN' or args.cls_type == 'ResNet' or args.cls_type == 'VIBCNN':
@@ -466,6 +494,7 @@ def train(args):
         wandb.log({"Test AUC": roc_auc, "Test AUC2": roc_auc2, "Best AUC": best_auc, "Test Loss": avg_val_loss, "Epoch": epoch})
         print(f"Epoch: {epoch}, AUC: {roc_auc:.5f}, Loss: {avg_val_loss:.5f}")
 
+
         if improved:
             steps_since_improvement = 0
         else:
@@ -516,14 +545,7 @@ if __name__ == '__main__':
     parser.add_argument('--kl', type=float, default=1, help='0.1 for VIBHO, 0.0005 for VIBCNN')
     parser.add_argument('--ioloss', type=float, default=1, help='0.1 for VIBHO, 0.0005 for VIBCNN')
 
-    # Dataset Params
-    parser.add_argument('--noise_level', type=float, default=35.0, help='noise level')
-    parser.add_argument('--signal_location', type=str, default='SKE', help='SKE, SKS')
-    parser.add_argument('--amplitude', type=float, default=0.05, help='Signal amplitude')
-    parser.add_argument('--sigma', type=float, default=3.0, help='Signal width')
-
-    # Others
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--data_parallel', type=bool, default=False)
     parser.add_argument('--use_ram', type=int, default=0)
 
@@ -537,11 +559,11 @@ if __name__ == '__main__':
 
     # Validation and Save Params
     # parser.add_argument('--val_interval', type=int, default=500, help='Validate every N iterations')
-    parser.add_argument('--patience', type=int, default=33, help='Stop after N validation checks without improvement')
+    parser.add_argument('--patience', type=int, default=50, help='Stop after N validation checks without improvement')
 
     # Paths and settings
     parser.add_argument('--srtype', type=str, default='UNet', help='UNet, UNet_Small, UNet_Tiny')
-    parser.add_argument('--n_data', type=float, default=17.0, help='1~17')
+    parser.add_argument('--proporation', type=float, default=1.0, help='0.001, 0.01, 0.1, 0.2, 0.5, 1.0')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--train_type', type=str, default='measure', help='cls, measure, recon')
 
@@ -578,23 +600,8 @@ if __name__ == '__main__':
     # Update run name to reflect sweep params
     args.param_setting = 'd{}_z{}_kl{}_lr{}_io{}_b{}'.format(args.depth, args.z_dim, args.kl, args.lr,  args.ioloss, args.batch_size)
     wandb.run.name = ('{}_{}_{}_{}_{}_{}'
-                      .format(save_folder, args.data[:3], args.train_type, args.cls_type, args.n_data,
+                      .format(save_folder, args.data[:3], args.train_type, args.cls_type, args.proporation,
                               args.param_setting))
-
-    total_images = args.n_data * 1000
-    end_index = int((total_images - 1) // 2000)
-
-    if end_index == 0:
-        # If we only need the first file (n_data is 1 or 2)
-        args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/background/train/dataset-000000.tar'
-    else:
-        # If we need multiple files
-        args.train_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/train/dataset-{{000000..{end_index:06d}}}.tar'
-
-    args.val_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/val/{args.data}/dataset-{{000000..000004}}.tar'
-
-    num_files = end_index + 1
-    args.num_workers = min(args.num_workers, num_files)
 
     ## --------------------------- ##
 
@@ -603,16 +610,16 @@ if __name__ == '__main__':
     from datetime import datetime
     current_date = datetime.now().strftime('%Y-%m-%d')
 
-    args.save_model_path = os.path.join(save_base, '{}/{}/{}/{}'.format(args.data, args.n_data, save_folder, current_date))
+    args.save_model_path = os.path.join(save_base, '{}/{}/{}/{}'.format(args.data, args.proporation, save_folder, current_date))
 
-    # if args.use_ram:
-    #     args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/train/data.h5'.format(args.data)
-    #     args.test_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/test/data.h5'.format(args.data)
-    #     args.val_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/val/data.h5'.format(args.data)
-    # else:
-    #     args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/train/'.format(args.data)
-    #     args.test_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/test/'.format(args.data)
-    #     args.val_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/val/'.format(args.data)
+    if args.use_ram:
+        args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/train/data.h5'.format(args.data)
+        args.test_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/test/data.h5'.format(args.data)
+        args.val_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/val/data.h5'.format(args.data)
+    else:
+        args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/train/'.format(args.data)
+        args.test_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/test/'.format(args.data)
+        args.val_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/val/'.format(args.data)
 
     # args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/train/'.format(args.data)
     # args.test_image_path = '/shared/anastasio-s2/SI/HCP_selected/{}/test/'.format(args.data)

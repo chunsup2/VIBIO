@@ -1,4 +1,4 @@
-project: CNNIO-SKS-MRI-FULL
+project: VIBIO-SKE-MRI-ABL
 entity: cspark5484
 program: train_cls_gaussianIO_EMA.py  # REPLACE with your actual python file name
 method: grid                  # Use 'grid' for all combinations, or 'bayes' for optimization
@@ -14,32 +14,30 @@ parameters:
   #   max: 0.0001
   #   distribution: log_uniform_values
   lr:
-    values: [0.005, 0.001]
+    value: 0.005
   kl:
-    value: 1e-2
+    values: [1e-8, 1e-5, 1e-4, 1e-3]
   # --- Base Parameters (Fixed for every run) ---
   z_dim:
-    value: 1024
+    value: 6
   cls_type:
-    value: "CNN"
-  proporation:
-    value: 1.0
+    value: "VIBCNN"
+  n_data:
+    value: 5
   data:
-    value: "sks_3.0_0.2_25.0_c2_num_signals_diffusion_n"
+    value: "ske_3.0_0.05_35.0"
   train_type:                     # Maps to your 'image="measure"' requirement
     value: "measure"
   depth:
-    value: 4
+    value: 5
   epochs:
     value: 10000
   patience:
-    value: 39
+    value: 33
   num_workers:
     value: 4
-  ioloss:
-    value: 1.0
   use_ram:
-    value: 1
+    value: 0
   scheduler_gamma:
     value: 0.5
   # You can add other static parameters here to ensure they are tracked
@@ -47,5 +45,5 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - "1"
+  - "2"
   - ${args}

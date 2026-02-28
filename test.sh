@@ -6,8 +6,8 @@
 
 # data="sks_3.0_0.1_35.0_c2_num_signals_diffusion_n"
 #data="ske_3.0_0.05_35.0_c2_num_signals_diffusion_n"
-
-data=sks_3.0_0.2_25.0_c2_num_signals_diffusion_n
+data="ske_3.0_0.05_35.0"
+#data=sks_3.0_0.2_25.0_c2_num_signals_diffusion_n
 #image="measure"
 gpus=0
 #cls_type1="CNN"
@@ -27,10 +27,12 @@ gpus=0
 #ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_3.0_0.2_25.0_c2_num_signals_diffusion_n/1.0/CNNIO/2026-02-11'
 #ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_3.0_0.2_25.0_c2_num_signals_diffusion_n/1.0/VIBIO/2026-02-06'
 #ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_choose/1.0/CNNIO-ABL'
-ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_choose/1.0/VIBIO-ABL/Z1024T'
+#ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_choose/1.0/VIBIO-ABL/Z1024T'
+ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/ske_3.0_0.05_35.0/30.0/CNNIO/2026-02-27'
 
-python test_new_ema_all_roc.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
+#python test_new_ema_all_roc.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
 #python test_new_all_roc.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
+python test_new_all.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
 
 
 
