@@ -112,6 +112,22 @@ def train(args):
     
     device = torch.device(args.device)
 
+    def pick_random_coord(sample):
+        """
+        Takes a single unbatched sample (image, coords_array).
+        Returns (image, single_chosen_coordinate).
+        """
+        image, coords = sample
+
+        # Randomly select one index from the available coordinates
+        rand_idx = random.randint(0, len(coords) - 1)
+
+        # Extract that specific [x0, y0] pair
+        x0, y0 = coords[rand_idx]
+
+        # Return the image and a fixed-size tensor of [x0, y0]
+        return image, torch.tensor([x0, y0], dtype=torch.float32)
+
     if args.train_type == 'recon':
         model = UNet(n_channels=1, n_classes=1, bilinear=True).to(device)
         
@@ -158,9 +174,10 @@ def train(args):
         .slice(total_images)
         .shuffle(n_shuffle, initial=10000)  # Shuffle the shards and maintain a local buffer of 10000 samples
         .decode("torch")
-        .to_tuple("npy")  # Extract the "jpg" and "cls" keys we defined during writing
+        .to_tuple("image.npy", "coords.npy")  # Extract the "jpg" and "cls" keys we defined during writing
+        .map(pick_random_coord)
         .batched(args.batch_size)  # Batch them together (e.g., batch size 64)
-        .with_length(int(total_images / 256))  # 672
+        .with_length(int(total_images / args.batch_size))  # 672
     )
 
     val_dataset = (
@@ -171,18 +188,12 @@ def train(args):
         .with_length(50)
     )
 
-    if args.signal_location == 'SKE':
-        x0, y0 = 170, 220
-    else:
-        # To do
-        x0, y0 = 170, 220
-
     H, W = 260, 311
     target_size = 272, 320
 
     X, Y = torch.meshgrid(
-        torch.arange(H, device='cuda'),
-        torch.arange(W, device='cuda'),
+        torch.arange(H, dtype=torch.float32, device='cuda'),
+        torch.arange(W, dtype=torch.float32, device='cuda'),
         indexing='ij'
     )
     # distance = torch.sqrt((X - x0) ** 2 + (Y - y0) ** 2)
@@ -193,15 +204,8 @@ def train(args):
     #     -0.5 * ((X[within_3sigma] - x0) ** 2 + (Y[within_3sigma] - y0) ** 2) / (args.sigma ** 2)
     # )
 
-    distance_sq = (X - x0) ** 2 + (Y - y0) ** 2
-    within_3sigma = distance_sq <= (3 * args.sigma) ** 2
-
-    signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
-    signal[within_3sigma] = args.amplitude * torch.exp(-0.5 * distance_sq[within_3sigma] / (args.sigma ** 2))
-
     train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None)
     val_dataloader = DataLoader(val_dataset, num_workers=1, batch_size=None)
-
 
     ## --- Training State Variables ---
     global_step = 0
@@ -211,11 +215,14 @@ def train(args):
     # Early stopping variables
     steps_since_improvement = 0
 
+    temp_tensor = torch.empty(int(18 * 1024**3 / 4)).to('cuda')
+
     for epoch in tqdm(range(args.epochs)):
         cls_model.train()
 
         for i, data in enumerate(tqdm(train_dataloader)):
             images = data[0].to('cuda')
+            coords_batch = data[1].to('cuda')
 
             B, H, W = images.shape
             half_B = B // 2
@@ -226,6 +233,26 @@ def train(args):
             # ---------------------------------------------------------
 
             # Inject the localized signal into the first half of the batch
+            if args.signal_location == 'ske':
+                x0 = torch.full((half_B,), 170.0, device='cuda')
+                y0 = torch.full((half_B,), 220.0, device='cuda')
+
+                x0 = x0.view(half_B, 1, 1)
+                y0 = y0.view(half_B, 1, 1)
+            else:
+                # x0 = torch.tensor([meta["x0"] for meta in data[1][:half_B]], device='cuda', dtype=torch.float32)
+                # y0 = torch.tensor([meta["y0"] for meta in data[1][:half_B]], device='cuda', dtype=torch.float32)
+                x0 = coords_batch[:half_B, 0].view(half_B, 1, 1)
+                y0 = coords_batch[:half_B, 1].view(half_B, 1, 1)
+
+            distance_sq = (X - x0) ** 2 + (Y - y0) ** 2
+            within_3sigma = distance_sq <= (3 * args.sigma) ** 2
+
+            gaussian = args.amplitude * torch.exp(-0.5 * distance_sq / (args.sigma ** 2))
+            signal = torch.where(within_3sigma, gaussian, torch.zeros_like(gaussian))
+
+            # signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
+            # signal[within_3sigma] = args.amplitude * torch.exp(-0.5 * distance_sq[within_3sigma] / (args.sigma ** 2))
             images[:half_B] = images[:half_B] + signal
 
             target_H, target_W = target_size
@@ -465,7 +492,7 @@ if __name__ == '__main__':
 
     # Dataset Params
     parser.add_argument('--noise_level', type=float, default=35.0, help='noise level')
-    parser.add_argument('--signal_location', type=str, default='SKE', help='SKE, SKS')
+    parser.add_argument('--signal_location', type=str, default='ske', help='ske, sks')
     parser.add_argument('--amplitude', type=float, default=0.05, help='Signal amplitude')
     parser.add_argument('--sigma', type=float, default=3.0, help='Signal width')
 
@@ -482,19 +509,19 @@ if __name__ == '__main__':
 
     # Validation and Save Params
     # parser.add_argument('--val_interval', type=int, default=500, help='Validate every N iterations')
-    parser.add_argument('--patience', type=int, default=33, help='Stop after N validation checks without improvement')
+    parser.add_argument('--patience', type=int, default=30, help='Stop after N validation checks without improvement')
 
     # Paths and settings
     parser.add_argument('--srtype', type=str, default='UNet', help='UNet, UNet_Small, UNet_Tiny')
-    parser.add_argument('--n_data', type=float, default=170.0, help='1~17')
+    parser.add_argument('--n_data', type=float, default=170.0, help='1~170')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--train_type', type=str, default='measure', help='cls, measure, recon')
 
-    parser.add_argument('--data', type=str, default='ske_3.0_0.05_35.0')
-    parser.add_argument('--train_image_path', type=str, default=None)
-    parser.add_argument('--test_image_path', type=str, default=None)
-    parser.add_argument('--val_image_path', type=str, default=None)
-    parser.add_argument('--save_model_path', type=str, default=None)
+    parser.add_argument('--data', type=str, default=None)
+    parser.add_argument('--train_image_base', type=str, default='/shared/anastasio-s2/SI/HCP_selected/background/train/')
+    parser.add_argument('--val_image_base', type=str, default='/shared/anastasio-s2/SI/HCP_selected/background/val/')
+    parser.add_argument('--test_image_base', type=str, default='/shared/anastasio-s2/SI/HCP_selected/background/test/')
+    parser.add_argument('--save_model_base', type=str, default='checkpoints')
 
     args = parser.parse_args()
 
@@ -503,6 +530,9 @@ if __name__ == '__main__':
     else:
         # Need to change
         save_folder = 'CNNIO'
+
+    if args.data is None:
+        args.data = f'{args.signal_location}_{args.sigma}_{args.amplitude}_{args.noise_level}'
 
     # ------ Wandb Setting ------ ##
 
@@ -532,15 +562,25 @@ if __name__ == '__main__':
     total_images = args.n_data * 1000
     end_index = int((total_images - 1) // 2000)
 
+    # if end_index == 0:
+    #     # If we only need the first file (n_data is 1 or 2)
+    #     args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/background/train_sks/dataset-000000.tar'
+    # else:
+    #     # If we need multiple files
+    #     args.train_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/train_sks/dataset-{{000000..{end_index:06d}}}.tar'
+
     if end_index == 0:
-        # If we only need the first file (n_data is 1 or 2)
-        args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/background/train/dataset-000000.tar'
+        # If we only need the first file
+        args.train_image_path = os.path.join(args.train_image_base, 'dataset-000000.tar')
     else:
         # If we need multiple files
-        args.train_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/train/dataset-{{000000..{end_index:06d}}}.tar'
+        args.train_image_path = os.path.join(args.train_image_base, f'dataset-{{000000..{end_index:06d}}}.tar')
 
-    args.val_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/val/{args.data}/dataset-{{000000..000004}}.tar'
+    # args.val_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/val/{args.data}/dataset-{{000000..000004}}.tar'
 
+    args.val_image_path = os.path.join(args.val_image_base, f'{args.data}/dataset-{{000000..000004}}.tar')
+
+    # n_workers
     num_files = end_index + 1
     args.num_workers = min(args.num_workers, num_files)
 
@@ -554,8 +594,9 @@ if __name__ == '__main__':
     save_base = 'checkpoints'
 
     from datetime import datetime
-    current_date = datetime.now().strftime('%Y-%m-%d')
 
-    args.save_model_path = os.path.join(save_base, '{}/{}/{}/{}'.format(args.data, args.n_data, save_folder, current_date))
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    args.save_model_path = os.path.join(args.save_model_base,
+                                        '{}/{}/{}/{}'.format(args.data, args.n_data, save_folder, current_date))
 
     train(args)

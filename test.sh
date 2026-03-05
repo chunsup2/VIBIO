@@ -7,8 +7,8 @@
 # data="sks_3.0_0.1_35.0_c2_num_signals_diffusion_n"
 #data="ske_3.0_0.05_35.0_c2_num_signals_diffusion_n"
 data="ske_3.0_0.05_35.0"
-#data=sks_3.0_0.2_25.0_c2_num_signals_diffusion_n
-#image="measure"
+#data="sks_3.0_0.1_25.0"
+
 gpus=0
 #cls_type1="CNN"
 #cls_type2="VIBCNN"
@@ -16,23 +16,14 @@ gpus=0
 #ioloss=1.0
 #proporation=1.0
 #lr=5e-3
-
 #z_dim=128
 #kl=0.01
 
-#checkpoint_path='checkpoints/SKS_Choose/1.0/CNN_measure_lr0.005_d4.pth'
-#checkpoint_path='checkpoints/SKS_Choose/1.0/VIBCNN_measure_kl0.001_lr0.0005_d4_z64.pth'
-#checkpoint_path='checkpoints/SKS_Choose/0.5/emaVIBCNN_measure_0.01_0.005_depth4_z128_io1.0.pth'
+ckpt_dir="/home/chunsup2/PycharmProjects/VIBIO/checkpoints/${data}/171.0/CNNIO/2026-02-28/"
+#ckpt_dir="/home/chunsup2/PycharmProjects/VIBIO/checkpoints/${data}/171.0/VIBIO/2026-03-01/"
 
-#ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_3.0_0.2_25.0_c2_num_signals_diffusion_n/1.0/CNNIO/2026-02-11'
-#ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_3.0_0.2_25.0_c2_num_signals_diffusion_n/1.0/VIBIO/2026-02-06'
-#ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_choose/1.0/CNNIO-ABL'
-#ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/sks_choose/1.0/VIBIO-ABL/Z1024T'
-ckpt_dir='/home/chunsup2/PycharmProjects/VIBIO/checkpoints/ske_3.0_0.05_35.0/30.0/CNNIO/2026-02-27'
-
-#python test_new_ema_all_roc.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
-#python test_new_all_roc.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
 python test_new_all.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
+#python test_new_ema_all.py $gpus --data "$data" --ckpt_dir "$ckpt_dir"
 
 
 

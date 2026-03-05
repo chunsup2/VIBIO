@@ -218,11 +218,16 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
     mu_list = []
 
     with torch.no_grad():
-        for image, measure, label in tqdm(loader, leave=False, desc=f"Testing {os.path.basename(ckpt_path)}"):
-            image, measure, label = image.to(device), measure.to(device), label.to(device)
-            label = label.long()
+        # for image, measure, label in tqdm(loader, leave=False, desc=f"Testing {os.path.basename(ckpt_path)}"):
+        #     image, measure, label = image.to(device), measure.to(device), label.to(device)
+        #     label = label.long()
+        #
+        #     feats = measure if params['train_type'] == 'measure' else image
+        for i, data in enumerate(tqdm(loader)):
+            feats = data[0].to('cuda')
+            feats = feats.unsqueeze(1)
 
-            feats = measure if params['train_type'] == 'measure' else image
+            label = torch.tensor([int(lbl) for lbl in data[1]]).to('cuda')
 
             if params['cls_type'] == 'VIBCNN':
                 t, mu, logvar, recon = model(feats, mode='test')
@@ -260,7 +265,7 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
     if num_classes == 2:
         auc_mean, auc_std = bootstrap_auc(y_true, y_scores, n_boot=args.n_boot)
     else:
-        auc_mean = 0.0;
+        auc_mean = 0.0
         auc_std = 0.0
 
     return {
@@ -279,14 +284,25 @@ def main(args):
 
     # 1. Setup Data
     if args.test_image_path is None:
-        args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/{args.data}/test/data.h5'
-
+        # args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/{args.data}/test/data.h5'
+        args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/test/{args.data}/dataset-{{000000..000004}}.tar'
     print(f"Data: {args.test_image_path}")
     print(f"Ckpt Dir: {args.ckpt_dir}")
 
     print("Loading Test Dataset...")
-    test_dataset = MRIDataset1(args.test_image_path, proportion=1.0)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=args.num_workers)
+    # test_dataset = MRIDataset1(args.test_image_path, proportion=1.0)
+    # test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=args.num_workers)
+    import webdataset as wds
+
+    test_dataset = (
+        wds.WebDataset(args.test_image_path, shardshuffle=False)
+        .decode("torch")
+        .to_tuple("npy", "cls")  # Extract the "jpg" and "cls" keys we defined during writing
+        .batched(100)  # Batch them together (e.g., batch size 64)
+        .with_length(100)
+    )
+
+    test_dataloader = DataLoader(test_dataset, num_workers=1, batch_size=None)
 
     # 2. Find Files
     if not os.path.exists(args.ckpt_dir):
@@ -323,7 +339,7 @@ def main(args):
             model.load_state_dict(state_dict)
 
             # Eval
-            res = evaluate_single_model(model, test_loader, device, params, args, f_path)
+            res = evaluate_single_model(model, test_dataloader, device, params, args, f_path)
 
             if res:
                 results.append(res)
