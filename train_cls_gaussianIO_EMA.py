@@ -177,8 +177,8 @@ def train(args):
     target_size = 272, 320
 
     X, Y = torch.meshgrid(
-        torch.arange(H, device='cuda'),
-        torch.arange(W, device='cuda'),
+        torch.arange(H, dtype=torch.float32, device='cuda'),
+        torch.arange(W, dtype=torch.float32, device='cuda'),
         indexing='ij'
     )
     # distance_sq = (X - x0) ** 2 + (Y - y0) ** 2
@@ -187,8 +187,10 @@ def train(args):
     # signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
     # signal[within_3sigma] = args.amplitude * torch.exp(-0.5 * distance_sq[within_3sigma] / (args.sigma ** 2))
 
-    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None)
-    val_dataloader = DataLoader(val_dataset, num_workers=1, batch_size=None)
+    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None,
+                                  prefetch_factor=args.num_workers if args.num_workers > 0 else 2)
+    val_dataloader = DataLoader(val_dataset, num_workers=4, batch_size=None,
+                                prefetch_factor=4 if args.num_workers > 0 else None)
 
 
     ## --- Training State Variables ---

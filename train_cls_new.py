@@ -204,8 +204,10 @@ def train(args):
     #     -0.5 * ((X[within_3sigma] - x0) ** 2 + (Y[within_3sigma] - y0) ** 2) / (args.sigma ** 2)
     # )
 
-    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None)
-    val_dataloader = DataLoader(val_dataset, num_workers=1, batch_size=None)
+    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None,
+                                  prefetch_factor=args.num_workers if args.num_workers > 0 else 2)
+    val_dataloader = DataLoader(val_dataset, num_workers=4, batch_size=None,
+                                prefetch_factor=4 if args.num_workers > 0 else None)
 
     ## --- Training State Variables ---
     global_step = 0
@@ -561,13 +563,6 @@ if __name__ == '__main__':
 
     total_images = args.n_data * 1000
     end_index = int((total_images - 1) // 2000)
-
-    # if end_index == 0:
-    #     # If we only need the first file (n_data is 1 or 2)
-    #     args.train_image_path = '/shared/anastasio-s2/SI/HCP_selected/background/train_sks/dataset-000000.tar'
-    # else:
-    #     # If we need multiple files
-    #     args.train_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/train_sks/dataset-{{000000..{end_index:06d}}}.tar'
 
     if end_index == 0:
         # If we only need the first file
