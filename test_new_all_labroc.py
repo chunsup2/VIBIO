@@ -233,6 +233,44 @@ def evaluate_single_model(model, loader, device, params, args, model_name):
     y_pred = np.array(all_preds)
     y_probs = np.array(all_probs)
 
+    # ---------------------------------------------------------
+    # AUTOMATIC LABROC TXT FILE GENERATOR
+    # ---------------------------------------------------------
+    # Filter the predicted scores into two separate arrays
+    scores_h0 = y_probs[y_true == 0]  # Scores for true negatives (Healthy)
+    scores_h1 = y_probs[y_true == 1]  # Scores for true positives (Diseased)
+
+    # Create filename based on model_name (e.g. model_bestAUC.pth -> model_bestAUC_labroc.txt)
+    if model_name.endswith('.pth'):
+        labroc_filename = model_name.replace('.pth', '_labroc.txt')
+    else:
+        labroc_filename = f"{model_name}_labroc.txt"
+
+    # Prepend the checkpoint directory path so it saves in the right folder
+    # Assuming args.ckpt_dir is available. If not, it saves in current working directory.
+    if hasattr(args, 'ckpt_dir'):
+        labroc_filename = os.path.join(args.ckpt_dir, labroc_filename)
+
+    with open(labroc_filename, 'w') as fid:
+        # 1. Write the mandatory headers
+        fid.write('LABROC\n')
+        fid.write('Large\n')
+
+        # 2. Write all H0 (Healthy / Label 1) scores
+        for score in scores_h0:
+            fid.write(f'{score:.6f}\n')
+
+        # 3. Write the middle separator
+        fid.write('*\n')
+
+        # 4. Write all H1 (Diseased / Label 2) scores
+        for score in scores_h1:
+            fid.write(f'{score:.6f}\n')
+
+        # 5. Write the final separator
+        fid.write('*')
+    # ---------------------------------------------------------
+
     acc = accuracy_score(y_true, y_pred)
     # Auto-flip check
     if acc < 0.5:

@@ -96,6 +96,19 @@ def parse_model_params(filename):
 
     return params
 
+def compute_test_kl(mu, logvar, clamp_logvar=True, logvar_min=-20.0, logvar_max=20.0):
+    """
+    Computes the exact KL divergence for the test set to approximate I(X;Z).
+    """
+    if clamp_logvar:
+        logvar = torch.clamp(logvar, min=logvar_min, max=logvar_max)
+
+    # per-dim KL: 0.5 * (mu^2 + sigma^2 - 1 - log sigma^2)
+    kl_per_dim = 0.5 * (mu.pow(2) + logvar.exp() - 1.0 - logvar)  # [B, D]
+
+    # Sum over dimensions, average over batch
+    kl = torch.sum(kl_per_dim, dim=1).mean()
+    return kl
 
 def load_ema_stats(ckpt_path):
     """
@@ -221,6 +234,9 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
     all_preds, all_scores, all_scores2, all_labels = [], [], [], []
     mu_list = []
 
+    total_kl = 0.0
+    num_batches = 0
+
     with torch.no_grad():
         # for image, measure, label in tqdm(loader, leave=False, desc=f"Testing {os.path.basename(ckpt_path)}"):
         #     image, measure, label = image.to(device), measure.to(device), label.to(device)
@@ -235,9 +251,16 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
 
             if params['cls_type'] == 'VIBCNN':
                 t, mu, logvar, recon = model(feats, mode='test')
+
+                # Calculate KL Divergence for the Information Plane
+                batch_kl = compute_test_kl(mu, logvar)
+                total_kl += batch_kl.item()
+                num_batches += 1
+
                 probs = F.softmax(t, dim=1)
                 pos_probs = probs[:, 1]
                 preds = torch.argmax(probs, dim=1)
+
                 all_preds.extend(preds.cpu().numpy())
                 all_scores2.extend(pos_probs.cpu().numpy())
                 mu_list.append(mu.cpu().numpy())
@@ -246,6 +269,7 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
                 probs = F.softmax(output, dim=1)
                 pos_probs = probs[:, 1]
                 preds = torch.argmax(probs, dim=1)
+
                 all_preds.extend(preds.cpu().numpy())
                 all_scores.extend(pos_probs.cpu().numpy())
 
@@ -261,8 +285,10 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
         # Assuming the loaded 'Kinv' (from K_ema file) is appropriate for calculation
         y_scores = normal_IO_test(mu_all, mu0_mean, s, Kinv)
         y_scores2 = np.array(all_scores2)
+        avg_kl = total_kl / num_batches if num_batches > 0 else 0.0
     else:
         y_scores = np.array(all_scores)
+        avg_kl = float('inf')
 
     # Metrics
     acc = accuracy_score(y_true, y_pred)
@@ -286,9 +312,11 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
             'AUC_Std': auc_std,
             'AUC_Mean2': auc_mean2,
             'AUC_Std2': auc_std2,
+            'KL_Mean': avg_kl,
             'z_dim': params.get('z_dim'),
             'depth': params.get('depth'),
-            'io': params.get('ioloss')
+            'io': params.get('ioloss'),
+            'KL_penalty': params.get('kl'),
         }
     else:
         return {
@@ -296,10 +324,74 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
             'Accuracy': acc,
             'AUC_Mean': auc_mean,
             'AUC_Std': auc_std,
+            'AUC_Mean2': auc_mean,
+            'AUC_Std2': auc_std,
+            'KL_Mean': avg_kl,
             'z_dim': params.get('z_dim'),
             'depth': params.get('depth'),
-            'io': params.get('ioloss')
+            'io': params.get('ioloss'),
+            'KL_penalty': params.get('kl'),
         }
+
+
+import matplotlib.cm as cm
+# from adjustText import adjust_text  # pip install adjustText (optional, for clean labels)
+
+def plot_information_plane(df, save_dir):
+    """
+    Plots I(X;Z) [KL Divergence] vs I(Z;Y) [AUC]
+    """
+    # Filter out non-VIB models (where KL is inf)
+    vib_df = df[df['KL_Mean'] != float('inf')].copy()
+
+    if vib_df.empty:
+        print("No VIB-IO models found to plot on the Information Plane.")
+        return
+
+    plt.figure(figsize=(12, 8))
+
+    # We will color the points based on their Network Depth (Capacity)
+    # If comparing different kl penalties, you could color by 'kl_penalty' instead
+    scatter = plt.scatter(
+        vib_df['KL_Mean'],
+        vib_df['AUC_Mean'],
+        c=vib_df['depth'],
+        cmap='viridis',
+        s=150,
+        edgecolors='k',
+        alpha=0.8
+    )
+
+    cbar = plt.colorbar(scatter)
+    cbar.set_label('Encoder Depth (Capacity)', fontsize=12)
+
+    # Annotate the points
+    texts = []
+    for idx, row in vib_df.iterrows():
+        label = f"D:{int(row['depth'])}, Z:{int(row['z_dim'])}, KL:{row['KL_penalty']}"
+        texts.append(plt.text(row['KL_Mean'], row['AUC_Mean'], label, fontsize=9))
+
+    # Try to repel overlapping labels using adjustText (if installed)
+    # try:
+    #     adjust_text(texts, arrowprops=dict(arrowstyle='->', color='gray', lw=0.5))
+    # except ImportError:
+    #     pass  # Will just draw standard overlapping text if not installed
+
+    plt.xlabel(r'Compression / I(X;Z) $\approx$ Test KL Divergence', fontsize=14)
+    plt.ylabel(r'Prediction / I(Z;Y) $\approx$ Test AUC', fontsize=14)
+    plt.title('VIB-IO Information Plane (Test Dataset)', fontsize=16)
+
+    # In Information theory, lower KL is better compression, so we invert the X-axis
+    # so that the "ideal" model is in the top-left corner.
+    # plt.gca().invert_xaxis()
+
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+
+    save_path = os.path.join(save_dir, 'information_plane_test.png')
+    plt.savefig(save_path, dpi=300)
+    print(f"\nSaved Information Plane plot to {save_path}")
+    plt.close()
 
 
 def main(args):
@@ -375,6 +467,8 @@ def main(args):
             import traceback
             traceback.print_exc()
 
+        # plot_information_plane(df, args.ckpt_dir)
+
     # 4. Save Summary
     if results:
         df = pd.DataFrame(results)
@@ -383,7 +477,9 @@ def main(args):
         df.to_csv(out_csv, index=False)
         print("\n" + "=" * 50)
         print(f"Saved results to {out_csv}")
-        print(df[['Filename', 'Accuracy', 'AUC_Mean', 'AUC_Std', 'AUC_Mean2', 'AUC_Std2', 'z_dim']].head().to_string())
+        print(df[['Filename', 'Accuracy', 'AUC_Mean', 'AUC_Std', 'AUC_Mean2', 'AUC_Std2', 'KL_Mean', 'z_dim']].head().to_string())
+
+        plot_information_plane(df, args.ckpt_dir)
 
 
 if __name__ == '__main__':

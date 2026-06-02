@@ -19,13 +19,20 @@ import torch.nn.functional as F
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, ker, pad):
+    def __init__(self, in_channels, out_channels, pooling="average", ker=3, pad=1):
         super(ConvBlock, self).__init__()
+        if pooling == 'max':
+            pool_layer = nn.MaxPool2d(kernel_size=2, stride=2)
+        elif pooling == 'average':
+            pool_layer = nn.AvgPool2d(kernel_size=2, stride=2)
+        else:
+            raise ValueError(f"Invalid pooling type: {pooling}. Use 'max' or 'average'.")
+
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=ker, padding=pad),
             nn.InstanceNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=2, stride=2)
+            pool_layer  # Use the selected layer here
         )
     def forward(self, x):
         return self.block(x)
@@ -98,6 +105,7 @@ class BinaryClassifier(nn.Module):
         num_classes: int,
         input_height: int = 272,
         input_width: int = 320,
+        pooling: str = "average",
         ker: int = 3,
         pad: int = 1,
         debug: bool = False,
@@ -125,7 +133,7 @@ class BinaryClassifier(nn.Module):
         self.conv_layers = nn.ModuleList()
         for i in range(depth):
             self.conv_layers.append(
-                ConvBlock(channels[i], channels[i+1], ker=ker, pad=pad)
+                ConvBlock(channels[i], channels[i+1], pooling=pooling, ker=ker, pad=pad)
             )
 
         # 🔑 Key: Automatically infer the input dimensions for the classifier
@@ -174,7 +182,7 @@ class BinaryClassifier(nn.Module):
 
 
 if __name__ == '__main__':
-    a = torch.randn(1, 1, 288, 320)
+    a = torch.randn(1, 1, 288, 320)  # 272
     b = torch.randn(1, 1)
     
     model = BinaryClassifier(depth=6, num_classes=2)

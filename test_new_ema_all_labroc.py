@@ -13,6 +13,7 @@ from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, accuracy_score, classification_report, roc_curve, auc
 
 import warnings
+
 warnings.filterwarnings("ignore")
 
 # --- Import your network and dataloader modules ---
@@ -55,30 +56,18 @@ def parse_model_params(filename):
     """
     params = {}
 
-    # Regex to capture variables:
-    # Group 1: Model Type (e.g. VIBCNN)
-    # Group 2: Train Type (measure)
-    # Group 3: KL
-    # Group 4: LR
-    # Group 5: Depth (d)
-    # Group 6: Z dim
-    # Group 7: IO loss
     pattern = r"(?:ema)?([A-Za-z0-9]+)_([a-z]+)_d(\d+)_z(\d+)_kl([\de\.-]+)_lr([\de\.-]+)_io([\de\.-]+)"
-
     match = re.search(pattern, filename)
 
-    print(match.group(1), match.group(2), match.group(3), match.group(4), match.group(5), match.group(6))
-
     if match:
-        params['cls_type'] = match.group(1)  # VIBCNN
-        params['train_type'] = match.group(2)  # measure
+        params['cls_type'] = match.group(1)
+        params['train_type'] = match.group(2)
         params['depth'] = int(match.group(3))
         params['z_dim'] = int(match.group(4))
         params['kl'] = float(match.group(5))
         params['lr'] = float(match.group(6))
         params['ioloss'] = float(match.group(7))
     else:
-        # Fallback for simpler names if regex fails
         print(f"Warning: Regex did not match full pattern for {filename}. Using default fallback.")
         params['cls_type'] = 'VIBCNN'
         params['train_type'] = 'measure'
@@ -86,7 +75,6 @@ def parse_model_params(filename):
         params['z_dim'] = 16
         params['ioloss'] = 1.0
 
-        # Try to find specific parts manually if regex failed
         if '_z' in filename:
             try:
                 z_part = filename.split('_z')[1].split('_')[0]
@@ -100,34 +88,21 @@ def parse_model_params(filename):
 def load_ema_stats(ckpt_path):
     """
     Constructs the NPY filenames based on the .pth filename.
-    Logic: Replace suffix '.pth' with '_{TYPE}_ema_{SUFFIX}.npy'
-
-    Input:  .../emaVIBCNN_..._io1.0_bestAUC.pth
-    Output: .../emaVIBCNN_..._io1.0_K_ema_bestAUC.npy
     """
-
-    # Define the mapping for suffixes
-    # We check for bestAUC or bestLoss to insert the tag in the correct spot
-
     if ckpt_path.endswith('_bestAUC.pth'):
         mu_path = ckpt_path.replace('_bestAUC.pth', '_mu_ema_bestAUC.npy')
         s_path = ckpt_path.replace('_bestAUC.pth', '_s_ema_bestAUC.npy')
         k_path = ckpt_path.replace('_bestAUC.pth', '_K_ema_bestAUC.npy')
-
     elif ckpt_path.endswith('_bestLoss.pth'):
         mu_path = ckpt_path.replace('_bestLoss.pth', '_mu_ema_bestLoss.npy')
         s_path = ckpt_path.replace('_bestLoss.pth', '_s_ema_bestLoss.npy')
         k_path = ckpt_path.replace('_bestLoss.pth', '_K_ema_bestLoss.npy')
-
     else:
-        # Fallback: Just replace extension if no known suffix structure
-        # e.g. "model.pth" -> "model_K_ema.npy"
         mu_path = ckpt_path.replace('.pth', '_mu_ema.npy')
         s_path = ckpt_path.replace('.pth', '_s_ema.npy')
         k_path = ckpt_path.replace('.pth', '_K_ema.npy')
 
     if os.path.exists(mu_path):
-        # Return mu, s, K
         return np.load(mu_path), np.load(s_path), np.load(k_path)
     else:
         print(f"   [!] EMA file not found: {os.path.basename(mu_path)}")
@@ -135,12 +110,6 @@ def load_ema_stats(ckpt_path):
 
 
 def normal_IO_test(mu, mu0_mean, s, Kinv):
-    """
-    Compute test statistic lambda.
-    Note: 'Kinv' argument expects the Inverse Covariance.
-    If you are loading 'K_ema' (Covariance), ensure it is inverted
-    before passing here OR that 'K_ema' file actually contains the inverse.
-    """
     mu = np.asarray(mu, dtype=float)
     F = mu - mu0_mean
     lin = 2 * np.einsum('i,ij,nj->n', s, Kinv, F)
@@ -192,7 +161,6 @@ def build_model(args, params):
         model = BinaryClassifier(depth, num_classes=num_classes, pooling=args.pooling)
     elif cls_type == 'VIBCNN':
         model = VIBCNN(depth, z_dim, num_classes=num_classes, pooling=args.pooling)
-        # model = VIBCNN_backup(depth, z_dim, num_classes=num_classes)
     elif cls_type == 'HO':
         model = SLNNHO()
     elif cls_type == 'VIBHO':
@@ -208,38 +176,27 @@ def build_model(args, params):
 def evaluate_single_model(model, loader, device, params, args, ckpt_path):
     model.eval()
 
-    # Load EMA stats if VIBCNN
     mu0_mean, s, Kinv = None, None, None
 
     if params['cls_type'] == 'VIBCNN':
-        # Load the NPY files corresponding to this specific PTH file
         mu0_mean, s, Kinv = load_ema_stats(ckpt_path)
-
         if mu0_mean is None:
-            return None  # Skip this model if stats are missing
+            return None
 
-    all_preds, all_scores, all_scores2, all_labels = [], [], [], []
+    all_preds, all_scores, all_labels = [], [], []
     mu_list = []
 
     with torch.no_grad():
-        # for image, measure, label in tqdm(loader, leave=False, desc=f"Testing {os.path.basename(ckpt_path)}"):
-        #     image, measure, label = image.to(device), measure.to(device), label.to(device)
-        #     label = label.long()
-        #
-        #     feats = measure if params['train_type'] == 'measure' else image
         for i, data in enumerate(tqdm(loader)):
             feats = data[0].to('cuda')
             feats = feats.unsqueeze(1)
-
             label = torch.tensor([int(lbl) for lbl in data[1]]).to('cuda')
 
             if params['cls_type'] == 'VIBCNN':
                 t, mu, logvar, recon = model(feats, mode='test')
                 probs = F.softmax(t, dim=1)
-                pos_probs = probs[:, 1]
                 preds = torch.argmax(probs, dim=1)
                 all_preds.extend(preds.cpu().numpy())
-                all_scores2.extend(pos_probs.cpu().numpy())
                 mu_list.append(mu.cpu().numpy())
             else:
                 output = model(feats)
@@ -254,15 +211,32 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
     y_true = np.array(all_labels)
     y_pred = np.array(all_preds)
 
-
-    # Compute Scores
     if params['cls_type'] == 'VIBCNN':
         mu_all = np.concatenate(mu_list, axis=0)
-        # Assuming the loaded 'Kinv' (from K_ema file) is appropriate for calculation
         y_scores = normal_IO_test(mu_all, mu0_mean, s, Kinv)
-        y_scores2 = np.array(all_scores2)
     else:
         y_scores = np.array(all_scores)
+
+    # ---------------------------------------------------------
+    # AUTOMATIC LABROC TXT FILE GENERATOR
+    # ---------------------------------------------------------
+    # Filter the predicted scores into two separate arrays
+    scores_h0 = y_scores[y_true == 0]  # Healthy
+    scores_h1 = y_scores[y_true == 1]  # Diseased
+
+    # Create a unique filename based on the current model's .pth name
+    labroc_filename = ckpt_path.replace('.pth', '_labroc.txt')
+
+    with open(labroc_filename, 'w') as fid:
+        fid.write('LABROC\n')
+        fid.write('Large\n')
+        for score in scores_h0:
+            fid.write(f'{score:.6f}\n')
+        fid.write('*\n')
+        for score in scores_h1:
+            fid.write(f'{score:.6f}\n')
+        fid.write('*')
+    # ---------------------------------------------------------
 
     # Metrics
     acc = accuracy_score(y_true, y_pred)
@@ -276,30 +250,15 @@ def evaluate_single_model(model, loader, device, params, args, ckpt_path):
         auc_mean = 0.0
         auc_std = 0.0
 
-    if params['cls_type'] == 'VIBCNN':
-        auc_mean2, auc_std2 = bootstrap_auc(y_true, y_scores2, n_boot=args.n_boot)
-
-        return {
-            'Filename': os.path.basename(ckpt_path),
-            'Accuracy': acc,
-            'AUC_Mean': auc_mean,
-            'AUC_Std': auc_std,
-            'AUC_Mean2': auc_mean2,
-            'AUC_Std2': auc_std2,
-            'z_dim': params.get('z_dim'),
-            'depth': params.get('depth'),
-            'io': params.get('ioloss')
-        }
-    else:
-        return {
-            'Filename': os.path.basename(ckpt_path),
-            'Accuracy': acc,
-            'AUC_Mean': auc_mean,
-            'AUC_Std': auc_std,
-            'z_dim': params.get('z_dim'),
-            'depth': params.get('depth'),
-            'io': params.get('ioloss')
-        }
+    return {
+        'Filename': os.path.basename(ckpt_path),
+        'Accuracy': acc,
+        'AUC_Mean': auc_mean,
+        'AUC_Std': auc_std,
+        'z_dim': params.get('z_dim'),
+        'depth': params.get('depth'),
+        'io': params.get('ioloss')
+    }
 
 
 def main(args):
@@ -307,21 +266,18 @@ def main(args):
 
     # 1. Setup Data
     if args.test_image_path is None:
-        # args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/val/{args.data}/dataset-{{000000..000004}}.tar'
         args.test_image_path = f'/shared/anastasio-s2/SI/HCP_selected/background/test/{args.data}/dataset-{{000000..000004}}.tar'
     print(f"Data: {args.test_image_path}")
     print(f"Ckpt Dir: {args.ckpt_dir}")
 
     print("Loading Test Dataset...")
-    # test_dataset = MRIDataset1(args.test_image_path, proportion=1.0)
-    # test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=args.num_workers)
     import webdataset as wds
 
     test_dataset = (
         wds.WebDataset(args.test_image_path, shardshuffle=False)
         .decode("torch")
-        .to_tuple("npy", "cls")  # Extract the "jpg" and "cls" keys we defined during writing
-        .batched(100)  # Batch them together (e.g., batch size 64)
+        .to_tuple("npy", "cls")
+        .batched(100)
         .with_length(100)
     )
 
@@ -340,7 +296,6 @@ def main(args):
     for f_name in files:
         f_path = os.path.join(args.ckpt_dir, f_name)
 
-        # Parse params
         try:
             params = parse_model_params(f_name)
         except Exception as e:
@@ -350,7 +305,6 @@ def main(args):
         print(f"\nProcessing: {f_name}")
         print(f"   -> Params: Z={params['z_dim']}, D={params['depth']}, IO={params['ioloss']}")
 
-        # Build & Load
         try:
             model = build_model(args, params)
             state_dict = torch.load(f_path, map_location=device)
@@ -366,7 +320,9 @@ def main(args):
 
             if res:
                 results.append(res)
-                print(f"   -> REsults: Acc: {res['Accuracy']:.4f} | AUC: {res['AUC_Mean']:.4f} | AUC_std: {res['AUC_Std']:.4f} | AUC2: {res['AUC_Mean2']:.4f} | AUC_std2: {res['AUC_Std2']:.4f}")
+                print(
+                    f"   -> Results: Acc: {res['Accuracy']:.4f} | AUC: {res['AUC_Mean']:.4f} | AUC_std: {res['AUC_Std']:.4f}")
+                print(f"   -> LABROC file saved: {f_name.replace('.pth', '_labroc.txt')}")
             else:
                 print("   -> Failed (likely missing NPY stats)")
 
@@ -383,7 +339,7 @@ def main(args):
         df.to_csv(out_csv, index=False)
         print("\n" + "=" * 50)
         print(f"Saved results to {out_csv}")
-        print(df[['Filename', 'Accuracy', 'AUC_Mean', 'AUC_Std', 'AUC_Mean2', 'AUC_Std2', 'z_dim']].head().to_string())
+        print(df[['Filename', 'Accuracy', 'AUC_Mean', 'AUC_Std', 'z_dim']].head().to_string())
 
 
 if __name__ == '__main__':

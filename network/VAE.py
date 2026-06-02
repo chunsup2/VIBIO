@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules import pooling
+
 
 class VIBHO(nn.Module):
     def __init__(self, input_size=288*320, z_dim=1):
@@ -29,13 +31,21 @@ class VIBHO(nn.Module):
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, ker=3, pad=1):
+    def __init__(self, in_channels, out_channels, pooling="average", ker=3, pad=1):
         super(ConvBlock, self).__init__()
+
+        if pooling == 'max':
+            pool_layer = nn.MaxPool2d(kernel_size=2, stride=2)
+        elif pooling == 'average':
+            pool_layer = nn.AvgPool2d(kernel_size=2, stride=2)
+        else:
+            raise ValueError(f"Invalid pooling type: {pooling}. Use 'max' or 'average'.")
+
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=ker, padding=pad),
             nn.InstanceNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=2, stride=2)  # 每层 /2
+            pool_layer  # Use the selected layer here
         )
 
     def forward(self, x):
@@ -50,6 +60,7 @@ class VIBCNN_backup(nn.Module):
         num_classes: int,
         input_height: int = 272,
         input_width: int = 320,
+        pooling = "average",
         ker: int = 3,
         pad: int = 1,
         mode: str = "train",
@@ -68,6 +79,7 @@ class VIBCNN_backup(nn.Module):
         self.debug = debug
         self.input_height = input_height
         self.input_width = input_width
+        self.pooling = pooling
 
         # encoder channel sizes
         channels = [16, 24, 32, 48, 64, 96, 128]
@@ -87,7 +99,7 @@ class VIBCNN_backup(nn.Module):
         self.conv_layers = nn.ModuleList()
         for i in range(depth):
             self.conv_layers.append(
-                ConvBlock(channels[i], channels[i+1], ker=self.ker, pad=self.pad)
+                ConvBlock(channels[i], channels[i+1], pooling=self.pooling, ker=self.ker, pad=self.pad)
             )
 
         # 🔑 Auto-infer the flattened dimension of the encoder output (classifier_input_dim)
@@ -212,6 +224,7 @@ class VIBCNN(nn.Module):
         num_classes: int,
         input_height: int = 272,
         input_width: int = 320,
+        pooling: str = "average",
         ker: int = 3,
         pad: int = 1,
         mode: str = "train",
@@ -225,6 +238,7 @@ class VIBCNN(nn.Module):
         """
         super(VIBCNN, self).__init__()
         self.mode = mode
+        self.pooling = pooling
         self.ker = ker
         self.pad = pad
         self.debug = debug
@@ -249,7 +263,7 @@ class VIBCNN(nn.Module):
         self.conv_layers = nn.ModuleList()
         for i in range(depth):
             self.conv_layers.append(
-                ConvBlock(channels[i], channels[i+1], ker=self.ker, pad=self.pad)
+                ConvBlock(channels[i], channels[i+1], pooling=self.pooling, ker=self.ker, pad=self.pad)
             )
 
         # 🔑 Auto-infer the flattened dimension of the encoder output (classifier_input_dim)
@@ -557,7 +571,7 @@ class VIBCNN(nn.Module):
 #         return t, mu, logvar, recon
 
 if __name__ == '__main__':
-    a = torch.randn(1, 1, 288, 320)
+    a = torch.randn(1, 1, 288, 320)  # 272
     b = torch.randn(1, 1)
     # model = UNet_Tiny_woc(1, 1)
     # parameters

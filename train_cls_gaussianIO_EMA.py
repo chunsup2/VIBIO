@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 from tqdm import tqdm
 from network.UNet import UNet
-from network.CNN_IO import BinaryClassifier
+from network.CNN_IO_new import BinaryClassifier
 from network.VAE import VIBCNN, VIBHO
 from network.HO import SLNNHO
 from network.ResNet_IO import ResNetX
@@ -125,14 +125,14 @@ def train(args):
         # load_model(model, os.path.join(args.save_model_path, args.srtype) + '/srnet.pth')
 
     if not os.path.exists(args.save_model_path):
-        os.makedirs(args.save_model_path)
+        os.makedirs(args.save_model_path, exist_ok=True)
 
     if args.cls_type == 'ResNet':
         cls_model = ResNetX(args.depth, num_classes=2).to(device)
     elif args.cls_type == 'CNN':
-        cls_model = BinaryClassifier(args.depth, num_classes=2).to(device)
+        cls_model = BinaryClassifier(args.depth, num_classes=2, pooling=args.pooling).to(device)
     elif args.cls_type == 'VIBCNN':
-        cls_model = VIBCNN(args.depth, args.z_dim, num_classes=2).to(device)
+        cls_model = VIBCNN(args.depth, args.z_dim, num_classes=2, pooling=args.pooling).to(device)
     else:
         raise ValueError(f"Unknown cls_type {args.cls_type}")
 
@@ -187,10 +187,10 @@ def train(args):
     # signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
     # signal[within_3sigma] = args.amplitude * torch.exp(-0.5 * distance_sq[within_3sigma] / (args.sigma ** 2))
 
-    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None,
-                                  prefetch_factor=args.num_workers if args.num_workers > 0 else 2)
-    val_dataloader = DataLoader(val_dataset, num_workers=4, batch_size=None,
-                                prefetch_factor=4 if args.num_workers > 0 else None)
+    train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None)
+                                  # prefetch_factor=args.num_workers if args.num_workers > 0 else 2)
+    val_dataloader = DataLoader(val_dataset, num_workers=4, batch_size=None)
+                                # prefetch_factor=4 if args.num_workers > 0 else None)
 
 
     ## --- Training State Variables ---
@@ -542,6 +542,7 @@ if __name__ == '__main__':
 
     # Model Params
     parser.add_argument('--cls_type', type=str, default='VIBCNN', help='CNN, ResNet, HO, VIBHO')
+    parser.add_argument('--pooling', type=str, default='average', help='average, max')
     parser.add_argument('--depth', type=int, default=4, help='1-10')
     parser.add_argument('--free_bits', type=float, default=0.5, help='Free bits threshold for KL divergence')
     parser.add_argument('--z_dim', type=int, default=64)
