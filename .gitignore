@@ -9,6 +9,7 @@ visualization/
 *.pth
 *.pt
 *.yaml
+*.yml
 *.ipynb
 *.csv
 *.zip
