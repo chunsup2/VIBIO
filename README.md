@@ -1,5 +1,5 @@
 # VIB-IO
-Pytorch implementation of "Approximating the Ideal Observer via a Variational Information Bottleneck", submitted to the journal of Medical Imaging special issue honoring Harrison H. Barrett.
+Python implementation of "Approximating the Ideal Observer via a Variational Information Bottleneck", submitted to the *Journal of Medical Imaging* special issue honoring Harrison H. Barrett.
 
 ## Abstract
 Purpose: The Bayesian ideal observer (IO) defines an upper bound on task-based observer performance and is widely used as a theoretical benchmark for optimizing medical imaging systems and data-acquisition designs. However, except in special cases, the exact IO test statistic is analytically intractable.
