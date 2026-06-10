@@ -9,13 +9,9 @@ from numpy.fft import fft2, ifft2
 H, W = 260, 311  # 272 * 320
 
 # Path Configuration
-# train_bg_path = "/shared/anastasio-s2/SOM/kaiyan/mri_1000_200k/background_train.npy"
-# test_bg_path  = "/shared/anastasio-s2/SOM/kaiyan/mri_1000_200k/background_test.npy"
-# loc_path      = "/home/zexinji/Zexin/Code/VIB/vib-main/preprocessing/mri_loc.npy"
-
-train_bg_path = "/shared/anastasio-s2/SOM/kaiyan/mri_1000_200k/background_train.npy"
-test_bg_path  = "/shared/anastasio-s2/SOM/kaiyan/mri_1000_200k/background_test.npy"
-loc_path      = "/home/zexinji/Zexin/Code/VIB/vib-main/preprocessing/mri_loc.npy"
+train_bg_path = "/shared/anastasio-s2/SOM/~"
+test_bg_path  = "/shared/anastasio-s2/SOM/~"
+loc_path      = "/shared/anastasio-s2/SOM/~"
 
 # Original Parameters
 mode           = 'sks'   # Signal Known Statistically (SKS)
@@ -31,7 +27,6 @@ AMPL  = min_amplitude    # Gaussian amplitude
 
 unbalanced = False       # We are doing balanced: equal number of positive and negative samples
 # shuffle    = True        # Reflected in naming only; we control actual order manually
-
 
 root_output_dir = "/shared/anastasio-s2/SI/HCP_selected"
 
@@ -169,7 +164,6 @@ def main():
         bg_test2, loc, AMPL, SIGMA, noise_level, mask=mask, seed=789
     )
 
-    
 
     # Normalize TRAIN
     data_with_signal_train = global_minmax_norm(data_with_signal_train)

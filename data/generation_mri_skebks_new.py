@@ -9,9 +9,8 @@ import matplotlib.pyplot as plt
 H, W = 260, 311
 
 # Path Configuration
-train_bg_path = "/shared/anastasio-s2/SOM/kaiyan/mri_1000_200k/background_train.npy"
-test_bg_path  = "/shared/anastasio-s2/SOM/kaiyan/mri_1000_200k/background_test.npy"
-loc_path      = "/home/zexinji/Zexin/Code/VIB/vib-main/preprocessing/mri_loc.npy"
+train_bg_path = "/shared/anastasio-s2/SOM/~"
+test_bg_path  = "/shared/anastasio-s2/SOM/~"
 
 # Original Parameters
 mode           = 'ske'
@@ -86,7 +85,7 @@ def save_to_h5(path, data_dict):
 
 
 # ================== Core Function: Build a split from background pairs ==================
-def build_split_from_background_pair(background_data, loc, ampl, sigma, noise_level, mask=None, seed=None):
+def build_split_from_background_pair(background_data, ampl, sigma, noise_level, mask=None, seed=None):
     """
     Input:
         background_data: (N, H, W) Pure backgrounds
@@ -191,8 +190,6 @@ def main():
     # bg_train = np.load(train_bg_path)  # Shape is usually (N_train, 260, 311)
     bg_test  = np.load(test_bg_path)
 
-    loc = np.load(loc_path)  # (N_loc, 2)
-
     # ---- 2. Construct mask (No undersampling -> all ones) ----
     mask = np.ones((H, W), dtype=np.float32)
 
@@ -211,18 +208,18 @@ def main():
 
     print("Building VAL split (pair duplicates)...")
     data_with_signal_val, invHg_data_val, label_val, mask_val = build_split_from_background_pair(
-        bg_val, loc, AMPL, SIGMA, noise_level, mask=mask, seed=456
+        bg_val , AMPL, SIGMA, noise_level, mask=mask, seed=456
     )
     # bg_test = bg_test.reshape(-1, H, W).astype(np.float32)
 
     print("Building VAL+TEST split (same backgrounds)...")
     # data_with_signal_val, invHg_data_val, label_val, mask_val = build_split_from_background_pair(
-    #     bg_test, loc, AMPL, SIGMA, noise_level, mask=mask, seed=456
+    #     bg_test, AMPL, SIGMA, noise_level, mask=mask, seed=456
     # )
 
     # print("Building TEST split (pair duplicates)...")
     data_with_signal_test, invHg_data_test, label_test, mask_test = build_split_from_background_pair(
-        bg_test2, loc, AMPL, SIGMA, noise_level, mask=mask, seed=789
+        bg_test2, AMPL, SIGMA, noise_level, mask=mask, seed=789
     )
 
     # If you want val/test to be identical, directly copy them
@@ -286,17 +283,6 @@ def main():
         save_to_h5(output_path, split_data)
         print(f"Saved {split_name} to {output_path}")
 
-    
-     # ---- 7. Extra: Save 10 sets of example images from train ----
-    # finaloutput_dir = '/home/zexinji/Zexin/Code/VIB/vib-main/preprocessing'
-    # example_dir = os.path.join(finaloutput_dir, "train_examples")
-    # save_example_images(
-    #     data_with_signal_train,
-    #     invHg_data_train,
-    #     label_train,
-    #     example_dir,
-    #     num_examples=10
-    # )
 
 
 if __name__ == "__main__":
