@@ -38,66 +38,6 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 
-# class BinaryClassifier(nn.Module):
-#     def __init__(self, depth, num_classes, ker=3, pad=1):
-#         super(BinaryClassifier, self).__init__()
-#         # channels = [4, 8, 16, 24, 32, 48, 64, 96, 128]  # Example channel sizes, modify if needed
-#         # channels = [16, 32, 64, 128, 256, 512]  # Example channel sizes, modify if needed
-#         channels = [16, 24, 32, 48, 64, 96]
-#         self.conv_layers = nn.ModuleList()
-#         for i in range(depth):
-#             self.conv_layers.append(ConvBlock(channels[i], channels[i+1], ker=ker,pad=pad))
-#         if depth == 0:
-#             # classifier_input_dim = 4 * 260 * 311
-#             classifier_input_dim = 4 * 272 * 320
-#         else:
-#             # classifier_input_dim = (260 // (2**depth)) * (311 // (2**depth)) * channels[depth]
-#             classifier_input_dim = (272 // (2 ** depth)) * (320 // (2 ** depth)) * channels[depth]
-#         self.inc = nn.Sequential(
-#             nn.Conv2d(1, 8, kernel_size=3, padding=1),
-#         )
-#
-#         self.classifier = nn.Sequential(
-#             nn.Linear(classifier_input_dim, num_classes),
-#         )
-#     def forward(self, x):
-#         # print(x.shape)
-#         x = self.inc(x)
-#         for layer in self.conv_layers:
-#             x = layer(x)
-#         x = x.view(x.size(0), -1)  # Flatten
-#         # print()
-#
-#         return self.classifier(x)
-
-
-# class BinaryClassifier(nn.Module):
-#     def __init__(self, depth, num_classes,ker=3, pad=1):
-#         super(BinaryClassifier, self).__init__()
-#         depth = depth - 1
-#         channels = [16, 24, 32, 48, 64, 96]  # Example channel sizes, modify if needed
-#         self.conv_layers = nn.ModuleList()
-#         for i in range(depth):
-#             self.conv_layers.append(ConvBlock(channels[i], channels[i+1], ker=ker,pad=pad))
-#         if depth == 0:
-#             classifier_input_dim = 288 * 320
-#         else:
-#             classifier_input_dim = (288 // (2**depth)) * (320 // (2**depth)) * channels[depth]
-#         self.inc = nn.Sequential(
-#             nn.Conv2d(1, 16, kernel_size=3, padding=1),
-#             # F.relu,
-#         )
-#
-#         self.classifier = nn.Sequential(
-#             nn.Linear(classifier_input_dim, num_classes),
-#         )
-#     def forward(self, x):
-#         x = self.inc(x)
-#         for layer in self.conv_layers:
-#             x = layer(x)
-#         x = x.view(x.size(0), -1)  # Flatten
-#         return self.classifier(x)
-
 class BinaryClassifier(nn.Module):
     def __init__(
         self,
@@ -122,7 +62,7 @@ class BinaryClassifier(nn.Module):
         # Channel configuration; your original was [16, 24, 32, 48, 64, 96, 128]
         channels = [16, 24, 32, 48, 64, 96, 128, 256, 512]
         assert depth <= len(channels) - 1, \
-            f"depth={depth} 太大，最多只能到 {len(channels) - 1}"
+            f"depth={depth} is too large; the maximum allowed depth is {len(channels) - 1}"
 
         self.depth = depth
 
@@ -136,7 +76,7 @@ class BinaryClassifier(nn.Module):
                 ConvBlock(channels[i], channels[i+1], pooling=pooling, ker=ker, pad=pad)
             )
 
-        # 🔑 Key: Automatically infer the input dimensions for the classifier
+        # Automatically infer the input dimensions for the classifier
         with torch.no_grad():
             dummy = torch.zeros(1, 1, input_height, input_width)
             x = self.inc(dummy)
