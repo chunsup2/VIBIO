@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 from network.UNet import UNet
 from network.CNN_IO_new import BinaryClassifier
 from network.VAE import VIBCNN, VIBHO, VIBCNN_backup
-from network.HO import SLNNHO
+# from network.HO import SLNNHO
 from network.ResNet_IO import ResNetX
 from dataloader import MRIDataset1
 
@@ -140,8 +140,8 @@ def build_model(args, params):
         # VIBCNN_backup is what was used in the original script
         model = VIBCNN(depth, z_dim, num_classes=num_classes, pooling=args.pooling)
         # model = VIBCNN_backup(depth, z_dim, num_classes=num_classes)
-    elif cls_type == 'HO':
-        model = SLNNHO()
+    # elif cls_type == 'HO':
+    #     model = SLNNHO()
     elif cls_type == 'VIBHO':
         model = VIBHO()
     elif train_type == 'recon':

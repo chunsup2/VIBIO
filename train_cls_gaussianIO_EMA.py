@@ -13,7 +13,7 @@ from tqdm import tqdm
 from network.UNet import UNet
 from network.CNN_IO_new import BinaryClassifier
 from network.VAE import VIBCNN, VIBHO
-from network.HO import SLNNHO
+# from network.HO import SLNNHO
 from network.ResNet_IO import ResNetX
 import sys
 
@@ -89,7 +89,9 @@ def apply_kspace_noise(imgs, mask, noise_level):
 
     # Perform batched 2D Inverse FFT
     img_recon = torch.fft.ifft2(kspace_noisy)
-    return torch.real(img_recon)
+
+    return torch.abs(img_recon)
+    # return torch.real(img_recon)
 
 
 def train(args):
@@ -181,11 +183,6 @@ def train(args):
         torch.arange(W, dtype=torch.float32, device='cuda'),
         indexing='ij'
     )
-    # distance_sq = (X - x0) ** 2 + (Y - y0) ** 2
-    # within_3sigma = distance_sq <= (3 * args.sigma) ** 2
-    #
-    # signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
-    # signal[within_3sigma] = args.amplitude * torch.exp(-0.5 * distance_sq[within_3sigma] / (args.sigma ** 2))
 
     train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None)
                                   # prefetch_factor=args.num_workers if args.num_workers > 0 else 2)
@@ -200,7 +197,7 @@ def train(args):
 
     # Early stopping variables
     steps_since_improvement = 0
-    temp_tensor = torch.empty(int(18 * 1024 ** 3 / 4)).to('cuda')
+
 
     # Placeholders for EMA variables (needed for validation)
     mu_ema = None
@@ -401,29 +398,12 @@ def train(args):
 
         if args.cls_type == 'VIBCNN':
             mu_all = np.array(mu_all_list)
-            # mu_all = np.concatenate(mu_all_list, axis=0)
-            # label_all = np.concatenate(label_all_list, axis=0)
-            # mu_all = mu_all[1:]
-            # label_all = label_all[1:]
+
             # to numpy
             mu_ema_ = mu_ema.detach().cpu().numpy()
             s_ema_ = s_ema.detach().cpu().numpy()
             Kinv_ema_ = Kinv_ema.detach().cpu().numpy()
             K_ema_ = K_ema.detach().cpu().numpy()
-
-            # mu_ema_tensor = normal_IO_train_torch.mu0_ema
-            # cov_ema_tensor = normal_IO_train_torch.cov_ema
-            #
-            # # Re-calculate s and Kinv from the stable EMA means for testing
-            # mu1_ema_tensor = normal_IO_train_torch.mu1_ema
-            #
-            # s_ema_tensor = mu1_ema_tensor - mu_ema_tensor
-            # Kinv_ema_tensor = torch.inverse(cov_ema_tensor)
-            #
-            # # Convert to numpy for the test function
-            # mu_ema_ = mu_ema_tensor.detach().cpu().numpy()
-            # s_ema_ = s_ema_tensor.detach().cpu().numpy()
-            # Kinv_ema_ = Kinv_ema_tensor.detach().cpu().numpy()
 
             lambda_ = normal_IO_test(mu_all, mu_ema_, s_ema_, Kinv_ema_)
 
@@ -447,8 +427,6 @@ def train(args):
                 'Test Statistic Distribution': wandb.Image(plt)
             })
             plt.close()
-            # plt.clf()
-            # plt.close('all')
 
 
         else:

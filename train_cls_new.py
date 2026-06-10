@@ -13,7 +13,7 @@ from tqdm import tqdm
 from network.UNet import UNet
 from network.CNN_IO_new import BinaryClassifier
 from network.VAE import VIBCNN, VIBHO
-from network.HO import SLNNHO
+# from network.HO import SLNNHO
 from network.ResNet_IO import ResNetX
 import sys
 
@@ -104,7 +104,8 @@ def apply_kspace_noise(imgs, mask, noise_level):
 
     # Perform batched 2D Inverse FFT
     img_recon = torch.fft.ifft2(kspace_noisy)
-    return torch.real(img_recon)
+    return torch.abs(img_recon)
+    # return torch.real(img_recon)
 
 
 def train(args):
@@ -196,13 +197,7 @@ def train(args):
         torch.arange(W, dtype=torch.float32, device='cuda'),
         indexing='ij'
     )
-    # distance = torch.sqrt((X - x0) ** 2 + (Y - y0) ** 2)
-    # within_3sigma = distance <= 3 * args.sigma
-    #
-    # signal = torch.zeros((H, W), dtype=torch.float32, device='cuda')
-    # signal[within_3sigma] = args.amplitude * torch.exp(
-    #     -0.5 * ((X[within_3sigma] - x0) ** 2 + (Y[within_3sigma] - y0) ** 2) / (args.sigma ** 2)
-    # )
+
 
     train_dataloader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=None,
                                   prefetch_factor=args.num_workers if args.num_workers > 0 else 2)
@@ -216,8 +211,6 @@ def train(args):
 
     # Early stopping variables
     steps_since_improvement = 0
-
-    temp_tensor = torch.empty(int(18 * 1024**3 / 4)).to('cuda')
 
     for epoch in tqdm(range(args.epochs)):
         cls_model.train()
@@ -271,32 +264,33 @@ def train(args):
             images = F.pad(images, pad_tuple, mode="constant", value=0.0)
             images = images.unsqueeze(1)
 
-            if args.blur_sigma > 0.0:
-                import torchvision.transforms.functional as TF
-                # IMPORTANT: Prevent blurring across the batch dimension (axis 0).
-                # We apply 0 blur to the batch axis, and blur_sigma to H and W.
-
-                radius = int(4.0 * args.blur_sigma + 0.5)
-                kernel_size = [2 * radius + 1, 2 * radius + 1]
-                sigma_list = [args.blur_sigma, args.blur_sigma]
-
-                blurred_images = TF.gaussian_blur(images, kernel_size=kernel_size, sigma=sigma_list)
-
-                zeros_images = torch.zeros_like(images)
-                raw_noise = apply_kspace_noise(zeros_images, None, args.noise_level)
-
-                target_std = torch.std(raw_noise, unbiased=False)
-
-                blurred_noise = TF.gaussian_blur(raw_noise, kernel_size=kernel_size, sigma=sigma_list)
-
-                current_std = torch.std(blurred_noise, unbiased=False)
-                calibrated_noise = blurred_noise * (target_std / current_std)
-
-                feats = blurred_images + calibrated_noise
-
-            else:
-            # Add noise
-                feats = apply_kspace_noise(images, None, args.noise_level)
+            # if args.blur_sigma > 0.0:
+            #     import torchvision.transforms.functional as TF
+            #     # IMPORTANT: Prevent blurring across the batch dimension (axis 0).
+            #     # We apply 0 blur to the batch axis, and blur_sigma to H and W.
+            #
+            #     radius = int(4.0 * args.blur_sigma + 0.5)
+            #     kernel_size = [2 * radius + 1, 2 * radius + 1]
+            #     sigma_list = [args.blur_sigma, args.blur_sigma]
+            #
+            #     blurred_images = TF.gaussian_blur(images, kernel_size=kernel_size, sigma=sigma_list)
+            #
+            #     zeros_images = torch.zeros_like(images)
+            #     raw_noise = apply_kspace_noise(zeros_images, None, args.noise_level)
+            #
+            #     target_std = torch.std(raw_noise, unbiased=False)
+            #
+            #     blurred_noise = TF.gaussian_blur(raw_noise, kernel_size=kernel_size, sigma=sigma_list)
+            #
+            #     current_std = torch.std(blurred_noise, unbiased=False)
+            #     calibrated_noise = blurred_noise * (target_std / current_std)
+            #
+            #     feats = blurred_images + calibrated_noise
+            #
+            # else:
+            # # Add noise
+            #     feats = apply_kspace_noise(images, None, args.noise_level)
+            feats = apply_kspace_noise(images, None, args.noise_level)
 
             task_label = torch.zeros(B, dtype=torch.long, device='cuda')
             task_label[:half_B] = 1
@@ -401,17 +395,6 @@ def train(args):
 
                 predicted_labels.extend(predicted.detach().cpu().numpy())
                 predicted_probs.extend(cls_probs.detach().cpu().numpy())
-
-                    # total += task_label.size(0)
-                    # correct += (predicted == task_label).sum().item()
-
-                # elif args.cls_type in ['HO', 'VIBHO']:
-                #     test_stat = cls.squeeze()
-                #     predicted = torch.where(test_stat > 0.5,
-                #                           torch.ones_like(test_stat),
-                #                           torch.zeros_like(test_stat)).long()
-                #     predicted_labels.extend(predicted.detach().cpu().numpy())
-                #     predicted_probs.extend(test_stat.detach().cpu().numpy())
 
                 true_labels.extend(task_label.detach().cpu().numpy())
 
