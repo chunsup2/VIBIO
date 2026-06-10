@@ -21,7 +21,7 @@ from network.CNN_IO_new import BinaryClassifier
 from network.VAE import VIBCNN, VIBHO, VIBCNN_backup
 # from network.HO import SLNNHO
 from network.ResNet_IO import ResNetX
-from dataloader import MRIDataset1
+
 
 
 def get_args():

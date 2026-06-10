@@ -17,7 +17,6 @@ from network.VAE import VIBCNN, VIBHO
 from network.ResNet_IO import ResNetX
 import sys
 
-from dataloader import *
 from torch.utils.data import DataLoader, WeightedRandomSampler, Subset
 
 import numpy as np
